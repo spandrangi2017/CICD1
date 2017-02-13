@@ -1,0 +1,260 @@
+--- 
+description: "Load-balancing of servers from Internet (public network) - To launch the stack, use the following command line heat stack-create -f LBaaS.hot -P server_keypair={SERVER_KEYPAIR} {STACK_NAME}"
+heat_template_version: 2013-05-23
+outputs: 
+  LBaaS_floating_ip: 
+    description: "load balancer floating IP address"
+    value: 
+      get_attr: 
+        - lb_vip_floating_ip
+        - floating_ip_address
+parameters: 
+  private_network_net: 
+    default: 10.0.0.0/24
+    description: "Private network address (e.g. 192.168.0.0/24)"
+    label: "Private network address"
+    type: string
+  private_network_subnet_high: 
+    default: "10.0.0.200"
+    description: "Higher IP address for the private subnet (e.g. 192.168.0.10/24) By default, x.x.x.1 will be set for the gateway"
+    label: "Subnet higher IP range"
+    type: string
+  private_network_subnet_low: 
+    default: "10.0.0.2"
+    description: "Lower IP address for the private subnet (e.g. 192.168.0.2/24) By default, x.x.x.1 will be set for the gateway"
+    label: "Subnet lower IP range"
+    type: string
+  public_net: 
+    default: ee925fbe-86a6-4588-931a-e1e9539376c5
+    description: "Public Network ID"
+    type: string
+  public_network_net: 
+    default: 66.0.0.0/23
+    description: "Public network address (e.g. 192.168.0.0/24)"
+    label: "Public network address"
+    type: string
+  public_network_subnet_high: 
+    default: "66.0.0.200"
+    description: "Higher IP address for the public subnet (e.g. 192.168.0.10/24) By default, x.x.x.1 will be set for the gateway"
+    label: "Subnet higher IP range"
+    type: string
+  public_network_subnet_low: 
+    default: "66.0.0.2"
+    description: "Lower IP address for the public subnet (e.g. 192.168.0.2/24) By default, x.x.x.1 will be set for the gateway"
+    label: "Subnet lower IP range"
+    type: string
+  router_name: 
+    default: front_router
+    description: "Router name with SourceNAT activate"
+    label: "Router name"
+    type: string
+  server_flavor: 
+    default: standard.4
+    description: "Flavor of the servers"
+    type: string
+  server_image: 
+    default: Ubuntu 14.04.2 LTS
+    description: "Image to use to boot the servers"
+    type: string
+  server_keypair: 
+    default: KeyPairOS1
+    description: "Please create the keypair before launching this stack"
+    label: "Keypair to set for the servers"
+    type: string
+resources: 
+  front_node_1: 
+    properties: 
+      flavor: 
+        get_param: server_flavor
+      image: 
+        get_param: server_image
+      key_name: 
+        get_param: server_keypair
+      name: front-node-1
+      networks: 
+        - network: 
+            get_resource: private_network
+      security_groups: 
+        - get_resource: vip_security_group
+      user_data: 
+        str_replace: 
+          params: 
+            $shared_ip: 
+              get_param: server_flavor
+          template: |
+              #!/bin/bash
+              sudo -i
+              apt-get update
+              apt-get install -y apache2
+              echo 'Apache-node1' > /var/www/html/index.html
+    type: "OS::Nova::Server"
+  front_node_2: 
+    properties: 
+      flavor: 
+        get_param: server_flavor
+      image: 
+        get_param: server_image
+      key_name: 
+        get_param: server_keypair
+      name: front-node-2
+      networks: 
+        - network: 
+            get_resource: private_network
+      security_groups: 
+        - get_resource: vip_security_group
+      user_data: 
+        str_replace: 
+          params: 
+            $shared_ip: 
+              get_param: server_flavor
+          template: |
+              #!/bin/bash
+              sudo -i
+              apt-get update
+              apt-get install -y apache2
+              echo 'Apache-node2' > /var/www/html/index.html
+    type: "OS::Nova::Server"
+  lb_vip_port: 
+    properties: 
+      fixed_ips: 
+        - subnet_id: 
+            get_resource: public_subnet
+      network_id: 
+        get_resource: public_network
+      security_groups: 
+        - get_resource: vip_security_group
+    type: "OS::Neutron::Port"
+  lb_vip_floating_ip: 
+    properties: 
+      floating_network_id: 
+        get_param: public_net
+      port_id: 
+        get_resource: lb_vip_port
+    type: "OS::Neutron::FloatingIP" 
+  lb_pool_vip: 
+    properties: 
+      floatingip_id: { get_resource: lb_vip_floating_ip }
+      port_id: { get_attr: [ pool , vip, port_id ] }
+    type: "OS::Neutron::FloatingIPAssociation"
+  lbaas: 
+    properties: 
+      members: 
+        - get_resource: front_node_1
+        - get_resource: front_node_2
+      pool_id: { get_resource: pool }
+      protocol_port: 80
+    type: "OS::Neutron::LoadBalancer"
+  monitor: 
+    properties: 
+      delay: 15
+      max_retries: 5
+      timeout: 10
+      type: HTTP
+    type: "OS::Neutron::HealthMonitor"
+  pool: 
+    properties: 
+      name: MY POOL
+      lb_method: ROUND_ROBIN
+      monitors: 
+        - get_resource: monitor
+      name: lb_front_pool
+      protocol: HTTP
+      subnet_id: { get_resource: private_subnet }
+      vip: 
+        name: front_vip
+        description: Front-end virtual IP (VIP)
+        protocol_port: 80
+        admin_state_up: True
+        subnet: { get_resource: public_subnet }
+    type: "OS::Neutron::Pool"
+  private_network: 
+    properties: 
+      admin_state_up: true
+      name: front-net
+      shared: false
+    type: "OS::Neutron::Net"
+  public_network: 
+    properties: 
+      admin_state_up: true
+      name: public-net
+      shared: false
+    type: "OS::Neutron::Net"  
+  private_subnet: 
+    properties: 
+      allocation_pools: 
+        - end: 
+            get_param: private_network_subnet_high
+          start: 
+            get_param: private_network_subnet_low
+      cidr: 
+        get_param: private_network_net
+      dns_nameservers: []
+      enable_dhcp: true
+      host_routes: []
+      ip_version: 4
+      name: front-subnet
+      network_id: 
+        get_resource: private_network
+    type: "OS::Neutron::Subnet"
+  public_subnet: 
+    properties: 
+      allocation_pools: 
+        - end: 
+            get_param: public_network_subnet_high
+          start: 
+            get_param: public_network_subnet_low
+      cidr: 
+        get_param: public_network_net
+      dns_nameservers: []
+      enable_dhcp: true
+      host_routes: []
+      ip_version: 4
+      name: public-subnet
+      network_id: 
+        get_resource: public_network
+    type: "OS::Neutron::Subnet"
+  router: 
+    properties: 
+      external_gateway_info: 
+        enable_snat: true
+        network: 
+          get_param: public_net
+      name: 
+        get_param: router_name
+    type: "OS::Neutron::Router"
+  router_interface: 
+    properties: 
+      router_id: 
+        Ref: router
+      subnet_id: 
+        Ref: public_subnet
+    type: "OS::Neutron::RouterInterface"
+  router_interface: 
+    properties: 
+      router_id: 
+        Ref: router
+      subnet_id: 
+        Ref: private_subnet
+    type: "OS::Neutron::RouterInterface" 
+  vip_security_group: 
+    type: "OS::Neutron::SecurityGroup"
+    properties: 
+      description: "Security group for ICMP, HTTP and SSH"
+      name: vip-sec-group
+      rules: 
+        - direction: egress
+          ethertype: IPv4
+          remote_ip_prefix: 0.0.0.0/0
+        - direction: ingress
+          protocol: icmp
+        - direction: ingress
+          ethertype: IPv4
+          port_range_max: 80
+          port_range_min: 80
+          protocol: tcp
+        - direction: ingress
+          ethertype: IPv4
+          port_range_max: 22
+          port_range_min: 22
+          protocol: tcp
+    
